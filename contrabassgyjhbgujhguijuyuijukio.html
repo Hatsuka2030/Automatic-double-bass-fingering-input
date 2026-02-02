@@ -233,7 +233,10 @@ if (baseRatio < -0.35) color = "#2ecc71";
                 finger = "4";
                 // 楽器別の色変更処理
                 if (instrument === 'bass') {
-                    // コントラバス: 色変更なし
+                    // コントラバス: 弦移動による色変更
+		　　if (color === "#2ecc71") color = "#3498db";
+                                    else if (color === "#3498db") color = "#e74c3c";
+                                    else if (color === "#e74c3c") color = "#000000";
                 } else {
                     // チェロ: 弦移動による色変更
                     if (color === "#2ecc71") color = "#3498db";
@@ -715,7 +718,7 @@ if (clefs && clefs.length > 0) {
             		    txt.setAttribute("x", relX);
                 	    txt.setAttribute("y", relY + 30);
                 	    txt.setAttribute("fill", result.color);
-                	    txt.setAttribute("font-size", "22px");
+                	    txt.setAttribute("font-size", "18px");
                 	    txt.setAttribute("font-weight", "bold");
                 	    txt.setAttribute("text-anchor", "middle");
                 	    txt.setAttribute("class", "finger-label"); 
@@ -755,7 +758,8 @@ if (clefs && clefs.length > 0) {
 
             // ========== 第2段階: 調号の検出とガイド線描画 ==========
             const extendedKeySigs = [];
-            
+            let clefSigCounter = 1; // ★修正: ここで変数を定義・初期化します
+	    let sigCenterX = 1;
             // クレフ直後の調号
             clefs.forEach(c => {
                 if (!isStaffFullyVisible(c)) return;
@@ -773,20 +777,122 @@ if (clefs && clefs.length > 0) {
                     // 音符との重なりチェック（厳格版）
                     const sR = sig.getBoundingClientRect();
                     let isOverlapWithNote = false;
+
+                    // ★追加: 記号の種類を先に判定
+                    const ratio = sR.height / sR.width;
+                    let sigType = "none";
+                    if (ratio >= 3.25 && ratio <= 3.44) sigType = "sharp";
+                    else if (ratio >= 2.8 && ratio <= 3.24) sigType = "flat";
+                    // naturalは通常クレフ直後には来ないが、念のため追加
+                    else if (ratio >= 3.45) sigType = "natural";
                     
+                    // ★修正: 記号の基準高さを計算（ガイドライン描画と同じ位置）
+                    let yOffsetRatio = (sigType === "flat") ? 0.78 : (sigType === "natural" ? 0.5 : 0.55);
+                    let sigReferenceY = sR.top + (sR.height * yOffsetRatio);
+
+                                       // ★デバッグ: 記号全体の枠
+                    const debugBox = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    
+                    // ★デバッグ: 基準高さの線（赤い横線）
+                    const refLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                    
+                    // ★デバッグ: 基準高さ±5pxの範囲（薄い赤）
+                    const refRange = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                         
+                    // ★デバッグ: 右側検出範囲（緑）
+                    const rightRange = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                        
+                    // ★追加: 記号の中心X座標を計算
+                    const sigCenterX = sR.left + (sR.width / 2);
+                    
+                    let debugInfo = {
+                        id: `C${clefSigCounter}`,
+                        type: sigType,
+                        sigTop: sR.top.toFixed(1),
+                        sigHeight: sR.height.toFixed(1),
+                        sigLeft: sR.left.toFixed(1),
+                        sigWidth: sR.width.toFixed(1),
+                        sigCenterX: sigCenterX.toFixed(1),
+                        yOffsetRatio: yOffsetRatio,
+                        referenceY: sigReferenceY.toFixed(1),
+                        nearNotes: []
+                    };
+                    
+                    let noteCounter = 1;
+
                     heads.forEach(h => {
                         const hRect = h.getBoundingClientRect();
                         const hTop = hRect.top + window.scrollY;
                         const isSameStaff = Math.abs(hTop - c.top) < 60;
                         if (isSameStaff) {
-                            const overlapX = sR.left < hRect.right - 2 && sR.right > hRect.left + 2;
-                            if (overlapX) isOverlapWithNote = true;
+                            // ★修正: 右側に音符があり、かつ基準高さが同じ場合に臨時記号と判定
+
+                            // ★追加: 音符の中心X座標
+                            const noteCenterX = hRect.left + (hRect.width / 2);
+                            const distanceX = noteCenterX - sigCenterX;
+
+                            const distance = hRect.left - sR.right;
+                            const heightDiff = hRect.top - sigReferenceY;
+                            
+                            // ★修正: 右側の距離（中心間）が23px未満
+                            const isCloseInX = distanceX > 0 && distanceX < 23.0;
+                            
+                            // ★追加: 左側の距離も確認（8分音符の旗対策）
+                            const distanceNegX = sigCenterX - noteCenterX;
+                            const isCloseInNegX = distanceNegX > 0 && distanceNegX < 10.0;
+                            
+                            // 高さ判定は参考値として残すが、判定には使わない
+                            const isSameHeight = Math.abs(hRect.top - sigReferenceY) < 1.3;
+                            const isNoteOnRight = hRect.left > sR.right - 5 && hRect.left < sR.right + 15;
+                            
+                            // 近接音符のみ記録
+                            if (Math.abs(distance) < 50 || isCloseInX || isCloseInNegX) {
+                                debugInfo.nearNotes.push({
+                                    noteNum: noteCounter,
+                                    noteLeft: hRect.left.toFixed(1),
+                                    noteTop: hRect.top.toFixed(1),
+                                    noteCenterX: noteCenterX.toFixed(1),
+                                    sigCenterX: sigCenterX.toFixed(1),
+                                    distanceX: distanceX.toFixed(1),
+                                    distanceNegX: distanceNegX.toFixed(1),
+                                    distance: distance.toFixed(1),
+                                    heightDiff: heightDiff.toFixed(1),
+                                    isNoteOnRight: isNoteOnRight,
+                                    isSameHeight: isSameHeight,
+                                    isCloseInX: isCloseInX,
+                                    isCloseInNegX: isCloseInNegX,
+                                    willTrigger: isCloseInX || isCloseInNegX
+                                });
+                                
+                                // ★デバッグ: 音符位置マーカー
+                                const noteMarker = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+
+                               // ★デバッグ: 音符番号
+                                const noteLabel = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                            }
+                            
+                            // ★修正: X座標近接判定（右側または左側）
+                            if (isCloseInX || isCloseInNegX) {
+                                isOverlapWithNote = true;
+                                // ★デバッグ: マッチした線
+                                const matchLine = document.createElementNS("http://www.w3.org/2000/svg", "line");
+			    }
                         }
                     });
+
+                    console.log(`%c[${debugInfo.id}]`, 'color: blue; font-weight: bold; font-size: 16px;',
+                        `判定: ${isOverlapWithNote ? '🚫 臨時記号(スキップ)' : '✅ 調号(処理)'}`,
+                        `\n記号タイプ: ${debugInfo.type}`,
+                        `\n記号位置: top=${debugInfo.sigTop}, left=${debugInfo.sigLeft}, width=${debugInfo.sigWidth}`,
+                        `\n記号中心X: ${debugInfo.sigCenterX}`,
+                        `\nyOffsetRatio: ${debugInfo.yOffsetRatio}`,
+                        `\n基準高さ: ${debugInfo.referenceY}`,
+                        `\n近接音符:`, debugInfo.nearNotes);
                     
+                    clefSigCounter++;
+
+
                     if (isOverlapWithNote) return; // 音符と重なる場合はスキップ
-                    
-                    const ratio = sR.height / sR.width;
                     console.log(`クレフ直後の調号: 縦横比=${ratio.toFixed(3)}, タイプ判定=${(ratio >= 3.25 && ratio <= 3.44) ? "sharp" : (ratio >= 2.8 && ratio <= 3.24) ? "flat" : "none"}`);
                     let type = (ratio >= 3.25 && ratio <= 3.44) ? "sharp" : (ratio >= 2.8 && ratio <= 3.24) ? "flat" : "none";
                     
@@ -828,6 +934,7 @@ if (clefs && clefs.length > 0) {
             });
 
             // 譜中の調号
+            let midSigCounter = 1; // ★修正: ここで変数を定義・初期化します
             accidentals.forEach(acc => {
                 const aR = acc.getBoundingClientRect();
                 
@@ -865,20 +972,120 @@ if (clefs && clefs.length > 0) {
                     let isTooCloseToNote = false;
                     const aTop = aR.top + window.scrollY;
                     
+                    // ★追加: 記号の種類を先に判定
+                    const ratio2 = aR.height / aR.width;
+                    let sigType2 = "none";
+                    if (ratio2 >= 3.45) sigType2 = "natural";
+                    else if (ratio2 >= 3.25 && ratio2 <= 3.44) sigType2 = "sharp";
+                    else if (ratio2 >= 3.1 && ratio2 <= 3.24) sigType2 = "flat";
+                    
+                    // ★追加: 記号の基準高さを計算（ガイドライン描画と同じ位置）
+                    let yOffsetRatio2 = (sigType2 === "flat") ? 0.78 : (sigType2 === "natural" ? 0.5 : 0.55);
+                    let sigReferenceY2 = aR.top + (aR.height * yOffsetRatio2);
+
+		    // ★デバッグ: 記号番号ラベル
+                    const debugLabel2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                    
+                    // ★デバッグ: 記号全体の枠
+                    const debugBox2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    
+                    // ★デバッグ: 基準高さの線（オレンジ色の横線）
+                    const refLine2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                    
+                    // ★デバッグ: 基準高さ±5pxの範囲（薄いオレンジ）
+                    const refRange2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                         
+                    // ★デバッグ: 右側検出範囲（シアン）
+                    const rightRange2 = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+                    
+                    // ★追加: 記号の中心X座標
+                    let sigCenterX2 = aR.left + (aR.width / 2);                    
+                    let debugInfo2 = {
+                        id: `M${midSigCounter}`,
+                        type: sigType2,
+                        sigTop: aR.top.toFixed(1),
+                        sigHeight: aR.height.toFixed(1),
+                        sigLeft: aR.left.toFixed(1),
+                        sigWidth: aR.width.toFixed(1),
+                        sigCenterX: sigCenterX2.toFixed(1),
+                        yOffsetRatio: yOffsetRatio2,
+                        referenceY: sigReferenceY2.toFixed(1),
+                        nearNotes: []
+                    };
+                    
+                    let noteCounter2 = 1;
+
+                    
                     heads.forEach(h => {
                         const hRect = h.getBoundingClientRect();
                         const hTop = hRect.top + window.scrollY;
                         const isSameStaff = Math.abs(hTop - myC.top) < 60;
                         if (isSameStaff) {
-                            // 1. 音符の左右15px以内にあるか
-                            const isNearX = aR.left < hRect.right + 15 && aR.right > hRect.left - 15;
-                            // 2. 記号と音符の「頭」の高さが一致するか（5px以内）
-                            const isSameHeight = Math.abs(hRect.top - aR.top) < 5;
+                            // ★追加: 音符の中心X座標
+                            const noteCenterX2 = hRect.left + (hRect.width / 2);
+                            const distanceX2 = noteCenterX2 - sigCenterX2;
+                            
+                            const distance = hRect.left - aR.right;
+                            const heightDiff = hRect.top - sigReferenceY2;
+                            
+                            // ★修正: 右側の距離（中心間）が23px未満
+                            const isCloseInX2 = distanceX2 > 0 && distanceX2 < 23.0;
+                            
+                            // ★追加: 左側の距離も確認（8分音符の旗対策）
+                            const distanceNegX2 = sigCenterX2 - noteCenterX2;
+                            const isCloseInNegX2 = distanceNegX2 > 0 && distanceNegX2 < 10.0;
+                            
+                            // 高さ判定は参考値として残すが、判定には使わない
+                            const isSameHeight = Math.abs(hRect.top - sigReferenceY2) < 1.3;
+                            const isNoteOnRight = hRect.left > aR.right - 5 && hRect.left < aR.right + 15;
 
-                            // 「左右にあり」かつ「高さが同じ」場合のみ、臨時記号とみなして除外対象（true）にする
-                            if (isNearX && isSameHeight) isTooCloseToNote = true;
+                            // 近接音符のみ記録
+                            if (Math.abs(distance) < 50 || isCloseInX2 || isCloseInNegX2) {
+                                debugInfo2.nearNotes.push({
+                                    noteNum: noteCounter2,
+                                    noteLeft: hRect.left.toFixed(1),
+                                    noteTop: hRect.top.toFixed(1),
+                                    noteCenterX: noteCenterX2.toFixed(1),
+                                    sigCenterX: sigCenterX2.toFixed(1),
+                                    distanceX: distanceX2.toFixed(1),
+                                    distanceNegX: distanceNegX2.toFixed(1),
+                                    distance: distance.toFixed(1),
+                                    heightDiff: heightDiff.toFixed(1),
+                                    isNoteOnRight: isNoteOnRight,
+                                    isSameHeight: isSameHeight,
+                                    isCloseInX: isCloseInX2,
+                                    isCloseInNegX: isCloseInNegX2,
+                                    willTrigger: isCloseInX2 || isCloseInNegX2
+                                });
+                                
+                                // ★デバッグ: 音符位置マーカー
+                                const noteMarker2 = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+                                                 
+                                // ★デバッグ: 音符番号
+                                const noteLabel2 = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                                
+                            }
+
+                            // ★修正: X座標近接判定（右側または左側）
+                            if (isCloseInX2 || isCloseInNegX2) {
+                                isTooCloseToNote = true;
+                                // ★デバッグ: マッチした線
+                                const matchLine2 = document.createElementNS("http://www.w3.org/2000/svg", "line");
+                                             }
                         }
                     });
+
+                     console.log(`%c[${debugInfo2.id}]`, 'color: purple; font-weight: bold; font-size: 16px;',
+                        `判定: ${isTooCloseToNote ? '🚫 臨時記号(スキップ)' : '✅ 調号(処理)'}`,
+                        `\n記号タイプ: ${debugInfo2.type}`,
+                        `\n記号位置: top=${debugInfo2.sigTop}, left=${debugInfo2.sigLeft}, width=${debugInfo2.sigWidth}`,
+                        `\n記号中心X: ${debugInfo2.sigCenterX}`,
+                        `\nyOffsetRatio: ${debugInfo2.yOffsetRatio}`,
+                        `\n基準高さ: ${debugInfo2.referenceY}`,
+                        `\n近接音符:`, debugInfo2.nearNotes);
+                    
+                    midSigCounter++;
+
 
                     if (!isTooCloseToNote) {
                         const ratio = aR.height / aR.width;
@@ -1012,7 +1219,10 @@ if (baseRatio < -0.35) color = "#2ecc71";
                                 finger = "4";
                                 // 楽器別の色変更処理
                                 if (currentInstrument === 'bass') {
-                                    // コントラバス: 色変更なし
+                                    // コントラバス: 弦移動による色変更
+				　　if (color === "#2ecc71") color = "#3498db";
+                                    else if (color === "#3498db") color = "#e74c3c";
+                                    else if (color === "#e74c3c") color = "#000000";
                                 } else {
                                     // チェロ: 弦移動による色変更
                                     if (color === "#2ecc71") color = "#3498db";
@@ -1061,7 +1271,7 @@ if (baseRatio < -0.35) color = "#2ecc71";
                         txt.setAttribute("x", relX);
                         txt.setAttribute("y", relY + 30);
                         txt.setAttribute("fill", color);
-                        txt.setAttribute("font-size", "22px");
+                        txt.setAttribute("font-size", "18px");
                         txt.setAttribute("font-weight", "bold");
                         txt.setAttribute("text-anchor", "middle");
                         txt.setAttribute("class", "finger-label");
